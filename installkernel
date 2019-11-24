@@ -112,11 +112,11 @@ state=$mp
     else
       state=$state" read only (ro). Remounting rw"
       echo $state
-      mount -o remount,rw /boot/efi
+      mount -o remount,rw $mp
     fi 
   else 
     echo "The ESP is not mounted at "$mp". Mounting the ESP now."
-    mount /boot/efi
+    mount $mp
   fi
   echo $state
   #echo "img "$img
