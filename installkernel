@@ -1,0 +1,148 @@
+#!/bin/sh
+# 
+# Copyright (C) 1995 - 1998, Ian A. Murdock <imurdock@debian.org>
+# Copyright (C) 1998, 1999, Guy Maor
+# Copyright (C) 2002, Matthew Wilcox
+# Copyright (C) 2002, 2004, 2005, 2007, 2009  Clint Adams
+# Copyright (C) 2009  Manoj Srivasta
+#
+# Install the kernel on a Debian Linux system.
+#
+# This script is called from /usr/src/linux/arch/i386/boot/install.sh.
+# If you install it as /sbin/installkernel, you can do a "make install"
+# from a generic kernel source tree, and the image will be installed to
+# the proper place for Debian GNU/Linux.
+
+set -e
+
+# Parse the command line options.  Of course, powerpc has to be all
+# different, and passes in a fifth argument, just because it is
+# "special". We ignore the fifth argument, and do not flag is as an
+# error, which it would be for any arch apart from powerpc
+if [ $# -eq 3 ] || [ $# -eq 4 ] || [ $# -eq 5 ] ; then
+  img="$2"
+  map="$3"
+  ver="$1"
+  if [ $# -ge 4 ] && [ -n "$4" ] ; then
+      dir="$4"
+  else
+      dir="/boot"
+  fi
+else
+  echo "Usage: installkernel <version> <image> <System.map> <directory>"
+  exit 1
+fi
+
+# Create backups of older versions before installing
+updatever () {
+  if [ -f "$dir/$1-$ver" ] ; then
+    mv "$dir/$1-$ver" "$dir/$1-$ver.old"
+  fi
+
+  cat "$2" > "$dir/$1-$ver"
+
+  # This section is for backwards compatibility only
+  if test -f "$dir/$1" ; then
+    # The presence of "$dir/$1" is unusual in modern intallations, and
+    # the results are mostly unused.  So only recreate them if they
+    # already existed.
+    if test -L "$dir/$1" ; then
+        # If we were using links, continue to use links, updating if
+        # we need to.
+        if [ "$(readlink -f ${dir}/${1})" = "${dir}/${1}-${ver}" ]; then
+            # Yup, we need to change
+            ln -sf "$1-$ver.old" "$dir/$1.old"
+        else
+            mv "$dir/$1" "$dir/$1.old"
+        fi
+        ln -sf "$1-$ver" "$dir/$1"
+    else                        # No links
+        mv "$dir/$1" "$dir/$1.old"
+        cat "$2" > "$dir/$1"
+    fi
+  fi
+}
+
+if [ "$(basename $img)" = "vmlinux" ] ; then
+  img_dest=vmlinux
+else
+  img_dest=vmlinuz
+fi
+updatever $img_dest "$img"
+updatever System.map "$map"
+
+config=$(dirname "$map")
+config="${config}/.config"
+if [ -f "$config" ] ; then
+  updatever config "$config"
+fi
+
+# If installing in the usual directory, run the same scripts that hook
+# into kernel package installation.  Also make sure the PATH includes
+# /usr/sbin and /sbin, just as dpkg would.
+if [ "$dir" = "/boot" ]; then
+  PATH="$PATH:/usr/sbin:/sbin" \
+    run-parts --verbose --exit-on-error --arg="$ver" --arg="$dir/$img_dest-$ver" \
+    /etc/kernel/postinst.d
+fi
+
+if [ $(grep CONFIG_EFI_STUB=y /usr/src/linux/.config) ] ; then
+  echo "This kernel is configured as an EFI stub kernel; installing a copy to the EFI Systems Partition (ESP)." 
+  if [ -z $(grep CONFIG_CMDLINE_BOOL=y /usr/src/linux/.config) ] ; then
+    echo "Kernel is not configured for a builtin command line."
+  else
+    echo "The builtin command line is "$(grep CONFIG_CMDLINE= /usr/src/linux/.config)
+  fi  
+if [ -z $(grep CONFIG_CMDLINE_OVERRIDE=y /usr/src/linux/.config) ] ; then
+  echo " Command line override is not configured."
+fi
+
+mp=$(grep -i fat /etc/fstab | awk '{ print $2 }')
+mt=$(grep -i fat /etc/fstab | awk '{ print $1 }')
+echo "The ESP in /etc/fstab is called "$mt" and its mount point is "$mp
+echo "Unmounting "$mp". 'umount: "$mp": not mounted.' is expected if it is not mounted."   
+umount $mp
+echo "Mounting the ESP at "$mp"."
+mount $mp
+state=$mp 
+  if [ $(find $mp -name EFI) ] ; then
+    state="The ESP is mounted at "$mp
+    if [[ -n $(grep $mp /proc/mounts | grep rw) ]] ; then
+      state=$state" read write (rw)."
+    else
+      state=$state" read only (ro). Remounting rw"
+      echo $state
+      mount -o remount,rw /boot/efi
+    fi 
+  else 
+    echo "The ESP is not mounted at "$mp". Mounting the ESP now."
+    mount /boot/efi
+  fi
+  echo $state
+  #echo "img "$img
+  #echo "img_dest "$img_dest
+  #echo "ver "$ver
+  newdir=$mp"/EFI/gentoo"
+  #echo "newdir "$newdir 
+  newname="vmlinuz-"$ver".efi"
+  #echo "newname "$newname  
+  #echo "path "$newdir/$newname
+  #newname=$(echo $(readlink /usr/src/linux) | sed 's/linux/vmlinuz/g')".efi";echo $newname
+  if [[ -d $newdir ]]	; then
+    if [[ -e $newdir"/"$newname ]] ; then
+      echo $newdir" exists"
+      mv $newdir"/"$newname $newdir"/"$newname".old"
+      cp "/usr/src/linux/"$img $newdir"/"$newname
+    else
+      cp "/usr/src/linux/"$img $newdir"/"$newname
+    fi
+  fi 
+efipath=$newdir"/"$newname
+efipath="${efipath////\\}"
+label="EFI stub-"$ver  
+efibootmgr -c -L "$label" -l '$efipath'                 
+else
+state="This is not a stub kernel. Not installing to the ESP."
+fi
+ 
+exit 0
