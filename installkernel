@@ -77,6 +77,14 @@ if [ -f "$config" ] ; then
   updatever config "$config"
 fi
 
+# use the same path as /usr/lib/kernel/install.d/50-dracut.install
+# expects for best interoperability
+initrd=$(dirname "$img")
+initrd="${initrd}/initrd"
+if [ -f "$initrd" ] ; then
+  updatever initrd "$initrd"
+fi
+
 # If installing in the usual directory, run the same scripts that hook
 # into kernel package installation.  Also make sure the PATH includes
 # /usr/sbin and /sbin, just as dpkg would.
@@ -84,65 +92,108 @@ if [ "$dir" = "/boot" ]; then
   PATH="$PATH:/usr/sbin:/sbin" \
     run-parts --verbose --exit-on-error --arg="$ver" --arg="$dir/$img_dest-$ver" \
     /etc/kernel/postinst.d
-fi
-
+fi  
+echo "" ;
+set +e
 if [ $(grep CONFIG_EFI_STUB=y /usr/src/linux/.config) ] ; then
-  echo "This kernel is configured as an EFI stub kernel; installing a copy to the EFI Systems Partition (ESP)." 
-  if [ -z $(grep CONFIG_CMDLINE_BOOL=y /usr/src/linux/.config) ] ; then
-    echo "Kernel is not configured for a builtin command line."
+  echo "This kernel is configured as an EFI stub kernel." 
+  if [ -z $(grep CONFIG_CMDLINE_BOOL=y /usr/src/linux/.config) ] ; then	 
+    echo "Kernel is not configured with a builtin command line. Kernel boot options must be provided externally."
   else
     echo "The builtin command line is "$(grep CONFIG_CMDLINE= /usr/src/linux/.config)
-  fi  
-if [ -z $(grep CONFIG_CMDLINE_OVERRIDE=y /usr/src/linux/.config) ] ; then
-  echo " Command line override is not configured."
-fi
-
-mp=$(grep -i fat /etc/fstab | awk '{ print $2 }')
-mt=$(grep -i fat /etc/fstab | awk '{ print $1 }')
-echo "The ESP in /etc/fstab is called "$mt" and its mount point is "$mp
-echo "Unmounting "$mp". 'umount: "$mp": not mounted.' is expected if it is not mounted."   
-umount $mp
-echo "Mounting the ESP at "$mp"."
-mount $mp
-state=$mp 
-  if [ $(find $mp -name EFI) ] ; then
-    state="The ESP is mounted at "$mp
-    if [[ -n $(grep $mp /proc/mounts | grep rw) ]] ; then
-      state=$state" read write (rw)."
-    else
-      state=$state" read only (ro). Remounting rw"
-      echo $state
-      mount -o remount,rw $mp
-    fi 
-  else 
-    echo "The ESP is not mounted at "$mp". Mounting the ESP now."
-    mount $mp
   fi
-  echo $state
-  #echo "img "$img
-  #echo "img_dest "$img_dest
-  #echo "ver "$ver
-  newdir=$mp"/EFI/gentoo"
-  #echo "newdir "$newdir 
-  newname="vmlinuz-"$ver".efi"
-  #echo "newname "$newname  
-  #echo "path "$newdir/$newname
-  #newname=$(echo $(readlink /usr/src/linux) | sed 's/linux/vmlinuz/g')".efi";echo $newname
-  if [[ -d $newdir ]]	; then
-    if [[ -e $newdir"/"$newname ]] ; then
-      echo $newdir" exists"
-      mv $newdir"/"$newname $newdir"/"$newname".old"
-      cp "/usr/src/linux/"$img $newdir"/"$newname
-    else
-      cp "/usr/src/linux/"$img $newdir"/"$newname
-    fi
-  fi 
-efipath=$newdir"/"$newname
-efipath="${efipath////\\}"
-label="EFI stub-"$ver  
-efibootmgr -c -L "$label" -l '$efipath'                 
+  if [ -z $(grep CONFIG_CMDLINE_OVERRIDE=y /usr/src/linux/.config) ] ; then 
+    echo "CONFIG_CMDLINE_OVERRIDE is not enabled. If external kernel boot options are provided they will prevail."
+  else 
+    echo "CONFIG_CMDLINE_OVERRIDE is enabled. If external kernel boot options are provided they will be ignored."
+  fi
+  echo "Attempting to copy EFI stub kernel to the EFI System Partition (ESP)."
 else
-state="This is not a stub kernel. Not installing to the ESP."
+  exit 0
 fi
- 
+echo "" ;
+set +e 
+echo "Nominally, when the UEFI firmware runs, it looks for a FAT32 formatted partition identifiable as an EFI System Partition (ESP). If on a GPT labeled disk the ESP should have partition type (GUID) c12a7328-f81f-11d2-ba4b-00a0c93ec93b . If on an MSDOS labeled disk (not encouraged, GPT preferred) the ESP should have partition type EF00 . fdisk, gdisk, parted, gparted will report a variety of TYPE's or FLAG's that are human readable to convey the thought that a partition is an ESP. 
+Searching for a FAT32 formatted partition of TYPE c12a7328-f81f-11d2-ba4b-00a0c93ec93b or TYPE EF00:"
+n=$(lsblk -i -l -o name,partuuid,uuid,parttype,fstype,mountpoint | grep -i "vfat" | grep -ice "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" -ice "0xef" )
+# echo $n" ESP found"
+nm=$(lsblk -i -l -o name,partuuid,uuid,parttype,fstype,mountpoint | grep -i "vfat" | grep -ie "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" -ie "0xef" | awk '{ print $6 }' | wc -w )
+# echo $nm" ESP mounted"
+mp=$(lsblk -i -l -o name,partuuid,uuid,parttype,fstype,mountpoint | grep -i "vfat" | grep -ie "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" -ie "0xef" | awk '{ print $6 }')
+# echo "Mount point "$mp
+dn=$(lsblk -i -l -o name,partuuid,uuid,parttype,fstype,mountpoint | grep -i "vfat" | grep -ie "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" -ie "0xef" | awk '{ print "/dev/"$1,"PARTUUID="$2,"UUID="$3 }' )
+#echo "dn "$dn
+if [[ n -eq 0 ]] ; then
+echo "No ESP found. Quitting."
+exit 0
+fi
+if [[ nm -gt 1 ]] ; then
+echo "Having more than one ESP mounted is too difficult a problem. Quitting."
+exit 0
+fi
+if [[ n -gt 1 ]] ; then
+echo "Having more than 1 ESP can be a problem when the UEFI goes looking for the 'right' ESP but settles for the first found. Suggest consolidation and elimination to one ESP when convenient."
+fi
+if [[ nm -eq 0 && n -eq 1 ]] ; then
+echo "One ESP found but no ESP is mounted."
+# gather device names of the ESP
+dn1=$(echo "$dn" | awk '{ print $1 }')
+dn2=$(echo "$dn" | awk '{ print $2 }')
+dn3=$(echo "$dn" | awk '{ print $3 }')
+#echo "checking for fat entries in fstab"
+nef=$(grep -ic "fat" /etc/fstab)
+# echo "Number of fat file system entries in /etc/fstab "$nef
+#echo "looking for ESP device name in fstab"
+    if [[ nef -gt 0 ]] ; then
+echo "m1"
+ ef=$(grep -i "$dn1" /etc/fstab)$(grep -i "$dn2" /etc/fstab)$(grep -i "$dn3" /etc/fstab)
+# grep -w 'warning\|error\|critical'
+#      ef=$(grep -iw '$dn1\|$dn2\|$dn3' /etc/fstab)
+echo  "fstab entry is"$ef
+      echo "$ef" | awk '{ print "The ESP has device name "$1,"and has mount point "$2" in /etc/fstab. Mounting it." }'
+echo "m3"
+      mp=$(echo "$ef" | awk '{ print $2 }' )
+echo "m4"
+    else
+      echo "No ESP device name found in /etc/fstab, mounting the ESP partition at /boot ."
+      mkdir -p /boot
+      mp="/boot"
+    fi
+echo "moose2"
+mount "$dn2" "$mp" && nm=1 # ; echo "mount $dn2 $mp"   
+fi
+if [[ nm -eq 1 ]] ; then
+echo "An ESP is mounted at $mp. Proceeding."
+else
+echo "No ESP could be mounted. Quitting"
+exit 0
+fi
+echo "img "$img
+#  echo "img_dest "$img_dest
+#  echo "ver "$ver
+   dir=$mp"/EFI/Gentoo"
+#  echo "dir "$dir 
+   name="vmlinuz-"$ver".efi"
+#  echo "name "$name  
+#  echo "path "$dir/$name
+   name=$(echo $(readlink /usr/src/linux) | sed 's/linux/vmlinuz/g')".efi" # ;echo $name
+  if [[ -d $dir ]]	; then
+    if [[ -e $dir"/"$name ]] ; then
+      # echo $dir" exists"
+      mv $dir"/"$name $dir"/"$name".old"
+      cp "/usr/src/linux/"$img $dir"/"$name
+    else
+      cp "/usr/src/linux/"$img $dir"/"$name
+    fi
+  fi
+y=$(efibootmgr | grep -c vmlinuz) ; echo $y
+if [[ y -gt 0 ]] ; then
+x=$( efibootmgr | grep vmlinuz | awk '{gsub("Boot",""); print}' | awk '{gsub("* vmlinuz",""); print}' )
+efibootmgr -b $x -B
+fi  
+efipath=$dir"/"$name
+efipath="${efipath////\\}" ; echo $efipath
+label="vmlinuz"  
+efibootmgr -c -L "$label" -l $efipath
+
 exit 0
