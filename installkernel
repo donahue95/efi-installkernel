@@ -143,32 +143,24 @@ dn3=$(echo "$dn" | awk '{ print $3 }')
 #echo "checking for fat entries in fstab"
 nef=$(grep -ic "fat" /etc/fstab)
 # echo "Number of fat file system entries in /etc/fstab "$nef
-#echo "looking for ESP device name in fstab"
+# echo "looking for ESP device name in fstab"
     if [[ nef -gt 0 ]] ; then
-echo "m1"
- ef=$(grep -i "$dn1" /etc/fstab)$(grep -i "$dn2" /etc/fstab)$(grep -i "$dn3" /etc/fstab)
-# grep -w 'warning\|error\|critical'
-#      ef=$(grep -iw '$dn1\|$dn2\|$dn3' /etc/fstab)
-echo  "fstab entry is"$ef
-      echo "$ef" | awk '{ print "The ESP has device name "$1,"and has mount point "$2" in /etc/fstab. Mounting it." }'
-echo "m3"
+      ef=$(grep -i "$dn1" /etc/fstab)$(grep -i "$dn2" /etc/fstab)$(grep -i "$dn3" /etc/fstab)
+    echo "$ef" | awk '{ print "The ESP has device name "$1,"and has mount point "$2" in /etc/fstab. Mounting it." }'
       mp=$(echo "$ef" | awk '{ print $2 }' )
-echo "m4"
     else
       echo "No ESP device name found in /etc/fstab, mounting the ESP partition at /boot ."
       mkdir -p /boot
       mp="/boot"
     fi
-echo "moose2"
-mount "$dn2" "$mp" && nm=1 # ; echo "mount $dn2 $mp"   
+mount "$dn2" "$mp" && nm=1    
 fi
 if [[ nm -eq 1 ]] ; then
 echo "An ESP is mounted at $mp. Proceeding."
 else
-echo "No ESP could be mounted. Quitting"
+echo "No ESP was or could be mounted. Quitting"
 exit 0
 fi
-echo "img "$img
 #  echo "img_dest "$img_dest
 #  echo "ver "$ver
    dir=$mp"/EFI/Gentoo"
@@ -176,23 +168,26 @@ echo "img "$img
    name="vmlinuz-"$ver".efi"
 #  echo "name "$name  
 #  echo "path "$dir/$name
-   name=$(echo $(readlink /usr/src/linux) | sed 's/linux/vmlinuz/g')".efi" # ;echo $name
-  if [[ -d $dir ]]	; then
-    if [[ -e $dir"/"$name ]] ; then
-      # echo $dir" exists"
-      mv $dir"/"$name $dir"/"$name".old"
-      cp "/usr/src/linux/"$img $dir"/"$name
-    else
-      cp "/usr/src/linux/"$img $dir"/"$name
-    fi
+   name=$(echo $(readlink /usr/src/linux) | sed 's/linux/vmlinuz/g')".efi"
+#  echo $name
+if [[ -d $dir ]]	; then
+  if [[ -e $dir"/"$name ]] ; then
+    # echo $dir" exists"
+    mv $dir"/"$name $dir"/"$name".old"
+    cp "/usr/src/linux/"$img $dir"/"$name
+  else
+    cp "/usr/src/linux/"$img $dir"/"$name
   fi
-y=$(efibootmgr | grep -c vmlinuz) ; echo $y
+fi
+y=$(efibootmgr | grep -c vmlinuz)
+# echo $y
 if [[ y -gt 0 ]] ; then
-x=$( efibootmgr | grep vmlinuz | awk '{gsub("Boot",""); print}' | awk '{gsub("* vmlinuz",""); print}' )
-efibootmgr -b $x -B
+  x=$( efibootmgr | grep vmlinuz | awk '{gsub("Boot",""); print}' | awk '{gsub("* vmlinuz",""); print}' )
+  efibootmgr -b $x -B
 fi  
 efipath=$dir"/"$name
-efipath="${efipath////\\}" ; echo $efipath
+efipath="${efipath////\\}"
+# echo $efipath
 label="vmlinuz"  
 efibootmgr -c -L "$label" -l $efipath
 
